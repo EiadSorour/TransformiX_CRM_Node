@@ -3,9 +3,17 @@ import axios from 'axios';
 import multer from 'multer';
 import csv from "csvtojson";
 import { Sequelize, DataTypes } from "sequelize";
+import cors from "cors";
 import 'dotenv/config';
 
 const app = express();
+
+app.use(cors({
+  origin: "http://localhost:3000", 
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+}));
 app.use(express.json());
 
 const storage = multer.memoryStorage();
@@ -32,6 +40,11 @@ sequelize.authenticate()
   .catch((error)=>{
     console.log('Unable to connect to the database:', error);
   })
+
+app.get("/api/test", (req,res)=>{
+  console.log("test");
+  return res.status(200).json({message: "okay", error: "this is error alo"})
+})
 
 app.post('/api/upload', upload.single('data'), async (req, res) => {
   try {

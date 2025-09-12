@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 app.use(cors({
-  origin: "http://localhost:3000", 
+  origin: process.env.FRONTEND_URL, 
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
@@ -37,6 +37,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 const port = process.env.PORT || 3000; 
+let DataTable;
 const map_typeof_to_sequelize = {
   "string": DataTypes.STRING,
   "number": DataTypes.DECIMAL,
@@ -111,6 +112,7 @@ app.delete("/api/table", async (req,res)=>{
   try {
     // 1. Delete the "data" table from the database
     await sequelize.query('DROP TABLE IF EXISTS "data";');
+    DataTable = null;
 
     // 2. Delete the "data.csv" file from the uploads folder
     const csvFilePath = path.join(__dirname, 'uploads', 'data.csv');
@@ -142,16 +144,6 @@ app.get("/api/display-cards", async (req,res)=>{
   res.status(200).send(response.data);
 })
 
-app.delete('/api/delete-data-table', async (req, res) => {
-  try {
-    await sequelize.query('DROP TABLE IF EXISTS "data";');
-    return res.status(200).json({ message: 'Table "data" deleted successfully.' });
-  } catch (error) {
-    console.error("Error deleting table \"data\":", error);
-    return res.status(500).json({ error: error.message || 'Failed to delete table.' });
-  }
-});
-
 app.get("/api/check-table", async (req,res)=>{
   // Check if table already exists in the database
   const tableExists = await sequelize.getQueryInterface().tableExists({tableName: "data"});
@@ -159,6 +151,31 @@ app.get("/api/check-table", async (req,res)=>{
       return res.status(200).json({status: true});
     }else{
       return res.status(200).json({status: false});
+  }
+})
+
+app.get("/api/data", async (req,res)=>{
+  try{
+    if (!DataTable) {
+      return res.status(404).json({ error: 'Data table not found. Please upload a CSV first.' });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10; // Default limit to 10
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await DataTable.findAndCountAll({
+      offset: offset,
+      limit: limit,
+      attributes: {
+        exclude: ['createdAt', 'updatedAt']
+      }
+    });
+    const lastPage = Math.ceil(count / limit);
+    res.status(200).json({ data: rows, lastPage, totalCount: count });
+  }catch(error){
+    console.log("error" , error);
+    res.status(500).json({ error: 'Failed to fetch data' });
   }
 })
 
@@ -195,7 +212,7 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
     });
 
     // Define table with name "data"
-    const DataTable = sequelize.define("data", databaseColumns, {freezeTableName:true});
+    DataTable = sequelize.define("data", databaseColumns, {freezeTableName:true});
 
     // Create table inside th database
     await sequelize.sync(); 

@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import FormData from 'form-data';
+import pg from 'pg'; 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,6 +92,7 @@ const inferSequelizeType = (columnName, data) => {
 // Sequelize ORM object for easier database connection and queries
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: "postgres",
+  dialectModule: pg, // Explicitly specify pg as the dialect module
   dialectOptions: {
     ssl: {
       require: true,

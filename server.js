@@ -1,18 +1,20 @@
+import 'dotenv/config';
 import express from 'express';
 import axios from 'axios';
 import multer from 'multer';
 import csv from "csvtojson";
 import { Sequelize, DataTypes } from "sequelize";
 import cors from "cors";
-import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import FormData from 'form-data';
 import pg from 'pg'; 
+import { v2 as cloudinary } from 'cloudinary'; // Import Cloudinary
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const app = express();
 
@@ -24,28 +26,10 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir);
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, 'data.csv'); // Name the file "data.csv"
-  },
-});
+const storage = multer.memoryStorage(); // Use memoryStorage
 const upload = multer({ storage: storage });
 const port = process.env.PORT || 3000; 
 let DataTable;
-const map_typeof_to_sequelize = {
-  "string": DataTypes.STRING,
-  "number": DataTypes.DECIMAL,
-  "boolean": DataTypes.BOOLEAN,
-  "bigint": DataTypes.BIGINT,
-  "date": DataTypes.DATE,
-};
 
 
 // Function to infer Sequelize data type based on column values
@@ -91,20 +75,53 @@ const inferSequelizeType = (columnName, data) => {
 
 // Sequelize ORM object for easier database connection and queries
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
-  dialect: "postgres",
+  dialect: "postgres", 
   dialectModule: pg, // Explicitly specify pg as the dialect module
+  ssl: true, // Explicitly enable SSL at the top level
   dialectOptions: {
     ssl: {
       require: true,
-      rejectUnauthorized: false, // For self-signed certificates, if any. Adjust as needed.
     },
   },
 });
+
+// Define a model for storing uploaded file metadata
+const UploadedFile = sequelize.define('UploadedFile', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  publicId: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  secureUrl: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  originalFilename: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+}, { freezeTableName: true });
 
 // Connect to database
 sequelize.authenticate()
   .then(()=>{
     console.log("Connected sucessfully to the database.");
+    console.log('Attempting to sync Sequelize models...');
+    sequelize.sync()
+      .then(() => {
+        console.log('Sequelize models synced successfully.');
+        sequelize.getQueryInterface().showAllTables().then(tables => {
+          console.log('Tables in database:', tables);
+        });
+      })
+      .catch(syncError => {
+        console.log('Error syncing Sequelize models:', syncError);
+      });
   })
   .catch((error)=>{
     console.log('Unable to connect to the database:', error);
@@ -121,14 +138,16 @@ app.delete("/api/table", async (req,res)=>{
     await sequelize.query('DROP TABLE IF EXISTS "data";');
     DataTable = null;
 
-    // 2. Delete the "data.csv" file from the uploads folder
-    const csvFilePath = path.join(__dirname, 'uploads', 'data.csv');
-    if (fs.existsSync(csvFilePath)) {
-      fs.unlinkSync(csvFilePath);
-      console.log(`Deleted file: ${csvFilePath}`);
+    // 2. Delete the uploaded file metadata from PostgreSQL and optionally from Cloudinary
+    const uploadedFile = await UploadedFile.findOne({ where: { publicId: 'data.csv' } });
+    if (uploadedFile) {
+      // Delete from Cloudinary
+      await cloudinary.uploader.destroy(uploadedFile.publicId);
+      // Delete metadata from database
+      await uploadedFile.destroy();
     }
 
-    return res.status(200).json({ message: 'Table "data" and file "data.csv" deleted successfully.' });
+    return res.status(200).json({ message: 'Table "data" and uploaded file data deleted successfully.' });
   } catch (error) {
     console.error("Error deleting table or file:", error);
     return res.status(500).json({ error: error.message || 'Failed to delete table or file.' });
@@ -136,36 +155,61 @@ app.delete("/api/table", async (req,res)=>{
 })
 
 app.get("/api/display-cards", async (req,res)=>{
-  const csvFilePath = path.join(__dirname, 'uploads', 'data.csv');
-  const formData = new FormData();
-  const csvReadStream = fs.createReadStream(csvFilePath);
-  formData.append('data', csvReadStream, 'data.csv'); // 'data' is the field name, 'data.csv' is the filename
+  try {
+    const uploadedFile = await UploadedFile.findOne({ where: { publicId: 'data.csv' } });
 
-  const response = await axios.post(
-    `${process.env.AI_SERVICE_URL}/upload`,
-    formData,
-    {
-      headers: formData.getHeaders(),
+    if (!uploadedFile) {
+      return res.status(200).json({
+        "domain": "No data uploaded",
+        "missing_data_ratio": 0,
+        "num_numeric_columns": 0,
+        "total_columns": 0,
+        "total_rows": 0
+      });
     }
-  );
-  res.status(200).send(response.data);
+
+    const csvDataBuffer = await axios.get(uploadedFile.secureUrl, { responseType: 'arraybuffer' });
+    const formData = new FormData();
+    formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile.originalFilename, contentType: 'text/csv' });
+
+    const response = await axios.post(
+      `${process.env.AI_SERVICE_URL}/upload`,
+      formData,
+      {
+        headers: formData.getHeaders(),
+      }
+    );
+    res.status(200).send(response.data);
+  } catch (error) {
+    console.error("Error in /api/display-cards:", error);
+    res.status(500).json({ error: error.message || 'Failed to fetch card data.' });
+  }
 })
 
 app.get("/api/check-table", async (req,res)=>{
-  // Check if table already exists in the database
-  const tableExists = await sequelize.getQueryInterface().tableExists({tableName: "data"});
-  if(tableExists){
+  try {
+    const uploadedFile = await UploadedFile.findOne({ where: { publicId: 'data.csv' } });
+    if (uploadedFile) {
       return res.status(200).json({status: true});
-    }else{
+    } else {
       return res.status(200).json({status: false});
+    }
+  } catch (error) {
+    console.error("Error in /api/check-table:", error);
+    res.status(500).json({ error: error.message || 'Failed to check table status.' });
   }
 })
 
 app.get("/api/data", async (req,res)=>{
   try{
     if (!DataTable) {
+      console.log("no table found");
+      
       return res.status(404).json({ error: 'Data table not found. Please upload a CSV first.' });
     }
+
+    console.log("founded!!");
+    
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10; // Default limit to 10
@@ -194,12 +238,43 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
       return res.status(400).json({ message: 'No CSV file uploaded' });
     }
 
-    // Read the uploaded CSV file from disk
-    const csvFilePath = path.join(__dirname, 'uploads', 'data.csv');
-    const userData = await csv({checkType: true}).fromFile(csvFilePath);
+    // Check if a file was previously uploaded
+    const existingFile = await UploadedFile.findOne({ where: { publicId: 'data.csv' } });
+    if (existingFile) {
+      // Delete the old DataTable if it exists
+      if (DataTable) {
+        await DataTable.drop();
+        DataTable = null;
+      }
+      // Optionally, delete the old file from Cloudinary (requires publicId)
+      await cloudinary.uploader.destroy(existingFile.publicId);
+      await existingFile.destroy();
+    }
+
+    // Upload to Cloudinary
+    const cloudinaryUploadResult = await cloudinary.uploader.upload(
+      `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`,
+      {
+        resource_type: 'raw',
+        public_id: 'data.csv', // Changed from 'data' to 'data.csv'
+        format: 'csv',
+      }
+    );
+
+    // Store Cloudinary URL and metadata in PostgreSQL
+    const newUploadedFile = await UploadedFile.create({
+      publicId: cloudinaryUploadResult.public_id,
+      secureUrl: cloudinaryUploadResult.secure_url,
+      originalFilename: req.file.originalname,
+    });
+
+    // Read the uploaded CSV file from memory
+    const userData = await csv({checkType: true}).fromString(req.file.buffer.toString());
+    
+    // Send to AI service - now fetches from Cloudinary URL
     const formData = new FormData();
-    const csvReadStream = fs.createReadStream(csvFilePath);
-    formData.append('data', csvReadStream, 'data.csv'); // 'data' is the field name, 'data.csv' is the filename
+    const csvDataBuffer = await axios.get(newUploadedFile.secureUrl, { responseType: 'arraybuffer' });
+    formData.append('data', Buffer.from(csvDataBuffer.data), { filename: newUploadedFile.originalFilename, contentType: req.file.mimetype });
 
     const response = await axios.post(
       `${process.env.AI_SERVICE_URL}/upload`,
@@ -207,7 +282,7 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
       {
         headers: formData.getHeaders(),
       }
-    );
+    );    
 
     // Set table dynamic schema
     const databaseColumns = {};

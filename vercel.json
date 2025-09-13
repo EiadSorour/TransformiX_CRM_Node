@@ -1,11 +1,8 @@
 {
-    "version": 2,
-    "builds": [{ "src": "server.js", "use": "@vercel/node" }],
-    "routes": [
-      {
-        "src": "/(.*)",
-        "dest": "server.js"
-      }
-    ],
-    "installCommand": "npm ci"
-  }
+    "rewrites": [
+        {
+        "source": "/(.*)",
+        "destination": "/api"
+        }
+    ]
+}

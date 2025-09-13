@@ -5,7 +5,7 @@ import multer from 'multer';
 import csv from "csvtojson";
 import cors from "cors";
 import FormData from 'form-data';
-import { v2 as cloudinary } from 'cloudinary'; // Import Cloudinary
+import { v2 as cloudinary } from 'cloudinary';
 import { neon } from '@neondatabase/serverless';
 
 // Cloudinary configuration
@@ -216,6 +216,49 @@ app.get("/api/test", async (req,res)=>{
   return res.status(200).json({message: "okay", error: "this is error alo"})
 })
 
+app.post("/api/smart-question-examples", async (req,res)=>{
+  const sql = getDbClient();
+  
+  const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
+
+  const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
+  const formData = new FormData();
+  formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
+
+  const response = await axios.post(
+    `${process.env.AI_SERVICE_URL}/smart-question-examples`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+    }
+  );
+
+  res.status(200).json(response.data);
+});
+
+app.post("/api/question-answer", async (req,res)=>{
+  const sql = getDbClient();
+  
+  const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
+
+  const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
+  const formData = new FormData();
+
+
+  formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
+  formData.append('question', req.body.question);
+
+  const response = await axios.post(
+    `${process.env.AI_SERVICE_URL}/question-answer`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+    }
+  );
+
+  res.status(200).json(response.data);
+})
+
 app.delete("/api/table", async (req,res)=>{
   const sql = getDbClient();
 
@@ -255,7 +298,7 @@ app.get("/api/display-cards", async (req,res)=>{
     }
 
     const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
-  const formData = new FormData();
+    const formData = new FormData();
     formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
 
   const response = await axios.post(
@@ -431,4 +474,11 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
   }
 });
 
+// production
 export default app;
+
+
+// development
+// app.listen(port , ()=>{
+//   console.log(`Server is running on port ${port}`);
+// });

@@ -16,6 +16,7 @@
     "node": "22.x"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.1",
     "axios": "^1.11.0",
     "cloudinary": "^2.7.0",
     "cors": "^2.8.5",

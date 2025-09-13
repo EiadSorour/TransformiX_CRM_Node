@@ -25,15 +25,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const sql = neon(process.env.DATABASE_URL);
+const getDbClient = () => neon(process.env.DATABASE_URL);
 const storage = multer.memoryStorage(); // Use memoryStorage
 const upload = multer({ storage: storage });
 const port = process.env.PORT || 3000; 
 
-sql.query('CREATE TABLE IF NOT EXISTS "UploadedFile" ("id" SERIAL PRIMARY KEY,"publicId" VARCHAR(255) NOT NULL UNIQUE,"secureUrl" VARCHAR(255) NOT NULL,"originalFilename" VARCHAR(255) NOT NULL,"createdAt" TIMESTAMP WITH TIME ZONE NOT NULL,"updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL);').then(()=>{
-  console.log("UploadedFile table created."); 
+// getDbClient().query('CREATE TABLE IF NOT EXISTS "UploadedFile" ("id" SERIAL PRIMARY KEY,"publicId" VARCHAR(255) NOT NULL UNIQUE,"secureUrl" VARCHAR(255) NOT NULL,"originalFilename" VARCHAR(255) NOT NULL,"createdAt" TIMESTAMP WITH TIME ZONE NOT NULL,"updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL);').then(()=>{
+//   console.log("UploadedFile table created."); 
   
-})
+// })
 
 function generateDynamicCreateTableSql(tableName, userData, inferSqlTypeFunction) {
   if (!tableName) {
@@ -146,7 +146,7 @@ function generateDynamicInsertSql(tableName, userData) {
   return `INSERT INTO "${tableName}" (${sanitizedColumnNames.join(', ')})\nVALUES\n${valuesClauses.join(',\n')};`;
 }
 
-async function generatePaginatedDataQuery(tableName, offset, limit) {
+async function generatePaginatedDataQuery(sql, tableName, offset, limit) {
   if (!tableName) {
       throw new Error("Table name must be provided.");
   }
@@ -155,13 +155,13 @@ async function generatePaginatedDataQuery(tableName, offset, limit) {
 
   // 1. Query information_schema.columns to get all column names
   // Assuming sql.query() returns an array of objects directly, e.g., [{ column_name: 'id' }, ...]
-  const columnsData = await sql.query(`
+  const columnsData = await sql`
       SELECT column_name
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = '${tableName}'
       ORDER BY ordinal_position;
-  `);
+  `;
 
   // Ensure columnsData is indeed an array
   if (!Array.isArray(columnsData)) {
@@ -196,8 +196,8 @@ async function generatePaginatedDataQuery(tableName, offset, limit) {
       LIMIT ${limit};
   `;
 
-  const rowsCount = await sql.query('SELECT * FROM "data";');
-  const desiredRows = await sql.query(rowsQuery);
+  const rowsCount = await sql`SELECT * FROM "data";`;
+  const desiredRows = await sql`${rowsQuery}`;
 
 
   return {
@@ -212,15 +212,17 @@ app.get("/api/test", async (req,res)=>{
 })
 
 app.delete("/api/table", async (req,res)=>{
+  const sql = getDbClient();
+
   try {
     // 1. Delete the "data" table from the database
-    await sql.query('DROP TABLE IF EXISTS "data";');
+    await sql`DROP TABLE IF EXISTS "data";`;
 
     // 2. Delete the uploaded file metadata from PostgreSQL and optionally from Cloudinary
-    const uploadedFile = await sql.query(`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`)
+    const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
     if (uploadedFile.length > 0) {
       // Delete from Cloudinary
-      await sql.query(`DELETE FROM "UploadedFile" WHERE "publicId" = 'data.csv';`); 
+      await sql`DELETE FROM "UploadedFile" WHERE "publicId" = 'data.csv';`; 
       await cloudinary.uploader.destroy(uploadedFile[0].publicId);
     }
 
@@ -232,8 +234,10 @@ app.delete("/api/table", async (req,res)=>{
 })
 
 app.get("/api/display-cards", async (req,res)=>{
+  const sql = getDbClient();
+  
   try {
-    const uploadedFile = await sql.query(`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`);
+    const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
 
     if (uploadedFile.length == 0) {
       return res.status(200).json({
@@ -246,7 +250,7 @@ app.get("/api/display-cards", async (req,res)=>{
     }
 
     const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
-    const formData = new FormData();
+  const formData = new FormData();
     formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
 
   const response = await axios.post(
@@ -264,8 +268,10 @@ app.get("/api/display-cards", async (req,res)=>{
 })
 
 app.get("/api/check-table", async (req,res)=>{
+  const sql = getDbClient();
+  
   try {
-    const uploadedFile = await sql.query(`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`);
+    const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
     if (uploadedFile.length > 0) {
       return res.status(200).json({status: true});
     } else {
@@ -278,14 +284,16 @@ app.get("/api/check-table", async (req,res)=>{
 })
 
 app.get("/api/data", async (req,res)=>{
+  const sql = getDbClient();
+  
   try{
 
-    const dataTable = await sql.query(`SELECT EXISTS (
+    const dataTable = await sql`SELECT EXISTS (
       SELECT 1
       FROM information_schema.tables
       WHERE table_schema = 'public'
         AND table_name = 'data'
-    );`);
+    );`;
 
 
     if (!dataTable[0]["exists"]) {
@@ -297,7 +305,7 @@ app.get("/api/data", async (req,res)=>{
     const limit = parseInt(req.query.limit) || 10; // Default limit to 10
     const offset = (page - 1) * limit;
 
-    const { count, rows } = await generatePaginatedDataQuery("data", offset, limit);
+    const { count, rows } = await generatePaginatedDataQuery(sql, "data", offset, limit);
 
     const lastPage = Math.ceil(count / limit);
     res.status(200).json({ data: rows, lastPage, totalCount: count });
@@ -308,6 +316,8 @@ app.get("/api/data", async (req,res)=>{
 })
 
 app.post('/api/upload', upload.single('data'), async (req, res) => {
+  const sql = getDbClient();
+  
   try {
 
     // Check if file uploaded
@@ -316,24 +326,24 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
     }
 
     // Check if a file was previously uploaded
-    const existingFile = await sql.query(`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`)
+    const existingFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
     if (existingFile.length > 0) {
       // Delete the old DataTable if it exists
-      const dataTable = await sql.query(`SELECT EXISTS (
+      const dataTable = await sql`SELECT EXISTS (
         SELECT 1
         FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_name = 'data'
-      );`);
+      );`;
 
 
       if (dataTable[0]["exists"]) {
-        await sql.query(`DROP TABLE IF EXISTS "data";`);
+        await sql`DROP TABLE IF EXISTS "data";`;
       }
       
       // Optionally, delete the old file from Cloudinary (requires publicId)
       await cloudinary.uploader.destroy(existingFile[0].publicId);
-      await sql.query(`DELETE FROM "UploadedFile" WHERE "publicId" = 'data.csv';`); 
+      await sql`DELETE FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
     }
 
     // Upload to Cloudinary
@@ -346,16 +356,16 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
       }
     );
 
-    await sql.query(`INSERT INTO "UploadedFile" ("publicId", "secureUrl", "originalFilename", "createdAt", "updatedAt")
+    await sql`INSERT INTO "UploadedFile" ("publicId", "secureUrl", "originalFilename", "createdAt", "updatedAt")
     VALUES (
         '${cloudinaryUploadResult.public_id}',
         '${cloudinaryUploadResult.secure_url}',
         '${req.file.originalname}',
         CURRENT_TIMESTAMP,
         CURRENT_TIMESTAMP
-    );`);
+    );`;
     
-    const newUploadedFile = (await sql.query(`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`))[0];
+    const newUploadedFile = (await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`)[0];
     
 
     // Read the uploaded CSV file from memory
@@ -375,9 +385,9 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
     );
 
     const createTableSql = generateDynamicCreateTableSql("data", userData, inferSqlType);
-    await sql.query(createTableSql);
+    await sql`${createTableSql}`;
 
-    await sql.query(generateDynamicInsertSql("data", userData));
+    await sql`${generateDynamicInsertSql("data", userData)}`;
 
     return res.status(200).json(response.data);
 
@@ -386,6 +396,4 @@ app.post('/api/upload', upload.single('data'), async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+export default app;

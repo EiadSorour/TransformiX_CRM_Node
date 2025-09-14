@@ -8,6 +8,45 @@ import FormData from 'form-data';
 import { v2 as cloudinary } from 'cloudinary';
 import { neon } from '@neondatabase/serverless';
 
+const dashboardTestData = {
+  "keyBusinessInsights": {
+      "primaryInsights": [
+          "Digital transformation services showing 34% quarter-over-quarter growth with strong client retention rates.",
+          "Customer satisfaction scores reached 94% with improved service delivery and faster project completion times."
+      ],
+      "quickStats": [
+          {"key": "Active Projects", "value": "127"},
+          {"key": "On-Time Delivery", "value": "89%"},
+          {"key": "Monthly Revenue", "value": "$2.4M"},
+          {"key": "Team Members", "value": "45"}
+      ]
+  },
+  "keyPerformanceMetrics": [
+      {"number": 847, "title": "Monthly Revenue", "description": "$847K"},
+      {"number": 342, "title": "Active Clients", "description": "342"},
+      {"number": 14.2, "title": "Avg. Project Days", "description": "14.2"},
+      {"number": 4.8, "title": "Client Rating", "description": "4.8"}
+  ],
+  "businessRecommendations": {
+      "actionableInsights": [
+          "Mobile app projects show highest profit margins (28% vs 22% average). Consider hiring 2-3 additional mobile developers.",
+          "Implement automated testing to reduce delivery time by 15% and improve client satisfaction scores.",
+          "Cloud migration services demand increasing. Partner with major cloud providers for better margins."
+      ],
+      "nextSteps": [
+          "Hire Mobile Developers",
+          "Implement DevOps Pipeline",
+          "Cloud Partnership Strategy",
+          "Client Feedback System"
+      ]
+  },
+  "analytics": [
+      {"name": "Revenue", "count": 100, "mean": 750000, "std": 50000, "min": 600000, "25%": 710000, "50%": 755000, "75%": 790000, "max": 850000},
+      {"name": "Client Score", "count": 100, "mean": 4.5, "std": 0.3, "min": 3.8, "25%": 4.3, "50%": 4.5, "75%": 4.7, "max": 5.0},
+      {"name": "Delivery Days", "count": 100, "mean": 15, "std": 2.5, "min": 10, "25%": 13, "50%": 15, "75%": 17, "max": 20}
+  ]
+}
+
 // Cloudinary configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -214,6 +253,71 @@ async function generatePaginatedDataQuery(sql, tableName, offset, limit) {
 app.get("/api/test", async (req,res)=>{
   console.log("test");
   return res.status(200).json({message: "okay", error: "this is error alo"})
+})
+
+app.get("/api/dashboard-data", async (req,res)=>{
+  const sql = getDbClient();
+  
+  const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
+
+  const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
+  const formData = new FormData();
+  formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
+
+  const response = await axios.post(
+    `${process.env.AI_SERVICE_URL}/dashboard-data`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+    }
+  );
+
+  res.status(200).json(response.data);
+})
+
+app.get("/api/pattern-analysis-initial", async (req,res)=>{
+  const sql = getDbClient();
+  
+  const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
+
+  const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
+  const formData = new FormData();
+  formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
+
+  const response = await axios.post(
+    `${process.env.AI_SERVICE_URL}/pattern-analysis-initial`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+    }
+  );
+
+  console.log(response.data);
+  
+
+  res.status(200).json(response.data);
+})
+
+app.post("/api/pattern-analysis-analyze", async (req,res)=>{
+  const sql = getDbClient();
+  
+  const uploadedFile = await sql`SELECT * FROM "UploadedFile" WHERE "publicId" = 'data.csv';`;
+
+  const csvDataBuffer = await axios.get(uploadedFile[0].secureUrl, { responseType: 'arraybuffer' });
+  const formData = new FormData();
+  formData.append('data', Buffer.from(csvDataBuffer.data), { filename: uploadedFile[0].originalFilename, contentType: 'text/csv' });
+
+  formData.append("min_support", req.body.minSupport);
+
+  const response = await axios.post(
+    `${process.env.AI_SERVICE_URL}/pattern-analysis-analyze`,
+    formData,
+    {
+      headers: formData.getHeaders(),
+    }
+  );
+
+  res.status(200).json(response.data);
 })
 
 app.post("/api/smart-question-examples", async (req,res)=>{
